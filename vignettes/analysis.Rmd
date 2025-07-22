@@ -1,0 +1,145 @@
+---
+title: "analysis single cells"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+```{r}
+devtools::load_all()
+library(programmingfour)
+```
+```{r setup, include = FALSE}
+# Opzioni globali per i blocchi di codice
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 6,
+  message = FALSE, # Nasconde i messaggi di caricamento dei pacchetti
+  warning = FALSE  # Nasconde gli avvisi
+)
+```
+
+
+# 1. Introduction
+This vignette describes a complete pipeline for the analysis of single-cell RNA-sequencing (scRNA-seq) data, using the functions provided by the programmingfour package. The analysis starts from raw data (a 10X Genomics count matrix) and proceeds to cell type annotation and inference of the tissue of origin.
+The entire process has been made modular and reproducible by encapsulating each analysis step into a specific function.
+
+#2. Environment Setup and Parameter Definition
+First, we load our programmingfour package, which contains all the necessary analysis functions. We also define the global parameters that will be used throughout the pipeline.
+
+```{r}
+# Load our package and helper libraries
+# NOTE: For a vignette, it's good practice to load all libraries explicitly.
+library(programmingfour) # Our package
+library(ggplot2)
+library(dplyr)
+
+# Define global parameters
+DATA_DIRECTORY   <- "../" 
+GTF_FILE_PATH    <- "../Homo_sapiens.GRCh38.111.gtf"
+PCA_COMPONENTS   <- 13   # Number of PCs to use for UMAP and clustering
+CLUSTER_RESOLUTION <- 0.5  # Resolution for the clustering algorithm
+```
+
+
+#3. Running the Analysis Pipeline
+Now we execute the pipeline by calling our functions sequentially. Each function takes the Seurat object processed by the previous step as input and returns an updated Seurat object.
+
+#Task 1: Data Loading and Filtering for Protein-Coding Genes
+We begin by loading the raw 10X data and using the GTF file to filter the expression matrix, retaining only genes annotated as "protein-coding".
+
+```{r}
+scrna_obj <- load_and_filter_data(
+  data_dir = DATA_DIRECTORY,
+  gtf_path = GTF_FILE_PATH
+)
+# Display a summary of the created Seurat object
+print(scrna_obj)
+```
+
+
+#Task 3: Removing Unwanted Genes
+Next, we remove genes that can introduce technical noise into the analysis, such as mitochondrial genes and ribosomal protein genes.
+
+```{r}
+filter_results <- filter_unwanted_genes(
+  scrna_obj = scrna_obj,
+  gtf_path = GTF_FILE_PATH
+)
+# Update our Seurat object with the filtered data
+scrna_obj <- filter_results$object 
+# Display the summary of removed genes
+print(filter_results$summary)
+```
+
+
+#Tasks 4 & 5: Pre-processing, PCA, and UMAP
+We perform standard pre-processing steps (normalization, identification of variable features, scaling) and subsequently run dimensionality reduction via Principal Component Analysis (PCA) and UMAP.
+
+```{r}
+# Task 4: Normalization, Scaling, and PCA
+scrna_obj <- preprocess_and_run_pca(scrna_obj = scrna_obj)
+
+# Tasks 5 & 6: UMAP and Clustering
+scrna_obj <- run_umap_and_cluster(
+  scrna_obj = scrna_obj,
+  pca_dims = PCA_COMPONENTS,
+  resolution = CLUSTER_RESOLUTION
+)
+
+# Display the number of cells in each found cluster
+table(scrna_obj$seurat_clusters)
+```
+
+
+#Task 7: Cell Type Annotation
+We use the SingleR package to automatically annotate the cell types of each cluster, using the "Human Primary Cell Atlas" reference database.
+
+```{r}
+# The annotation function may print messages about download status
+scrna_obj <- annotate_cell_types(scrna_obj = scrna_obj)
+```
+
+# 4. Visualization and Interpretation of Results
+With the analysis complete, we proceed to visualize the results for biological interpretation.
+
+#PCA Variance and UMAP Visualization
+We generate the key plots: a histogram of the variance explained by the first principal components, and UMAPs colored by cluster and by annotated cell type.
+
+```{r}
+# This function directly prints the plots
+generate_visualizations(scrna_obj = scrna_obj)
+```
+
+#Concordance between Clusters and Cell Types
+To assess the quality of the clustering and annotation, we analyze the concordance between the Seurat clusters and the labels predicted by SingleR. We also identify the top 2 marker genes for each cell type.
+
+```{r}
+top_markers_table <- analyze_concordance_and_markers(
+  scrna_obj = scrna_obj,
+  group_by_labels = "singleR_labels"
+)
+# Print the top markers, if found
+if (!is.null(top_markers_table)) {
+  knitr::kable(top_markers_table)
+}
+```
+
+#Task 8: Inference of Tissue Origin
+Finally, based on the identified cellular composition, we formulate a hypothesis about the sample's tissue of origin. A bar chart of cell proportions is the most effective tool for this analysis.
+
+```{r}
+composition_plot <- infer_tissue_origin(
+  scrna_obj = scrna_obj,
+  label_column = "singleR_labels"
+)
+# The plot is printed by the function, but we save it for potential future use
+```
+
+#5. Conclusion
+The pipeline successfully processed the scRNA-seq data, identifying 15 cell clusters and annotating them with plausible cell types, suggesting a tissue origin of Peripheral Blood (PBMC). Encapsulating the code in an R package ensured a modular, reproducible, and easily documentable analysis through this vignette.
