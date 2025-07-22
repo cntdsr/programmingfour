@@ -1,0 +1,291 @@
+---
+title: "Single-Cell RNA-Seq Analysis"
+author: "Desirè Cantavenera"
+date: "2025-07-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This report details the analysis of a single-cell RNA-seq dataset containing approximately 10,000 human cells. The goal of this project was to process the raw count data, identify the different cell populations, and form a hypothesis about the tissue of origin. The analysis was performed in R using primarily the Seurat and Tidyverse packages.
+
+
+
+## TASK 1: Gene annotation
+The first step was to load the 10X Genomics dataset into R and create a Seurat object. I then used a Gene Information Table (GTF) file to identify and keep only the protein-coding genes for the downstream analysis. This is a standard step to focus the analysis on genes that have biological functions.
+
+```{r}
+# Load necessary libraries
+library(Seurat)
+library(tidyverse)
+library(rtracklayer)
+
+# Load the 10X data from the current directory
+data_dir <- "." 
+expression_matrix <- Read10X(data.dir = data_dir)
+
+# Create the main Seurat object
+scrna_obj <- CreateSeuratObject(counts = expression_matrix, project = "scRNA_Project")
+print(scrna_obj)
+
+# Import the GTF file to get gene information
+gtf_file <- file.path(data_dir, "Homo_sapiens.GRCh38.111.gtf")
+gtf_data <- rtracklayer::import(gtf_file)
+gtf_df <- as.data.frame(gtf_data)
+
+# Get a list of all protein-coding genes
+protein_coding_genes <- gtf_df %>%
+  filter(type == "gene" & gene_biotype == "protein_coding") %>%
+  pull(gene_name) %>%
+  unique()
+
+cat(paste("Found", length(protein_coding_genes), "unique protein-coding genes in the GTF file.\n"))
+
+# Filter the Seurat object to keep only protein-coding genes
+n_genes_before <- nrow(scrna_obj)
+protein_coding_in_matrix <- intersect(rownames(scrna_obj), protein_coding_genes)
+scrna_obj <- subset(scrna_obj, features = protein_coding_in_matrix)
+n_genes_after <- nrow(scrna_obj)
+
+cat(paste("Number of genes before filtering:", n_genes_before, "\n"))
+cat(paste("Number of genes after filtering:", n_genes_after, "\n"))
+```
+
+
+
+
+## TASK 2: Gene Expression Summary
+For each cell, I calculated the number of genes that were expressed with 3 or more UMIs (Unique Molecular Identifiers). This metric helps us understand the complexity of each cell. I visualized the distribution of these counts using a violin plot.
+
+```{r}
+# Get the raw count matrix
+counts_matrix <- GetAssayData(object = scrna_obj, layer = "counts")
+
+# For each cell, count genes with >= 3 UMIs
+n_genes_ge3 <- colSums(counts_matrix >= 3)
+
+# Add this information to the Seurat object's metadata
+scrna_obj$nGenes_ge3 <- n_genes_ge3
+
+# Create the violin plot
+VlnPlot(scrna_obj, features = "nGenes_ge3", pt.size = 0) +
+  NoLegend() +
+  labs(
+    title = "Distribution of Genes with High Expression per Cell",
+    y = "Number of Genes (UMI count >= 3)",
+    x = "All Cells"
+  )
+```
+
+
+
+## TASK 3: Gene Filtering
+Next, I removed genes that could add technical noise to the analysis. These included mitochondrial genes (cell stress), and ribosomal genes and pseudogenes (which are highly expressed in all cells and can hide the biological signal). A summary table shows how many genes were removed from each category.
+
+```{r}
+# Get the list of genes currently in the object
+current_genes <- rownames(scrna_obj)
+
+# Identify gene categories to remove
+mito_genes <- grep(pattern = "^MT-", x = current_genes, value = TRUE, ignore.case = TRUE)
+ribo_genes <- grep(pattern = "^RP[SL]", x = current_genes, value = TRUE, ignore.case = TRUE)
+
+ribo_pseudo_genes_info <- gtf_df %>%
+  filter(
+    grepl("pseudogene", gene_biotype, ignore.case = TRUE) &
+    grepl("^RP[SL]", gene_name, ignore.case = TRUE)
+  ) %>%
+  pull(gene_name) %>% 
+  unique()
+
+ribo_pseudo_genes <- intersect(current_genes, ribo_pseudo_genes_info)
+
+# Create the summary table
+summary_table <- data.frame(
+  Category = c("Mitochondrial Genes", "Ribosomal Protein Genes", "Ribosomal Pseudogenes"),
+  GenesRemoved = c(length(mito_genes), length(ribo_genes), length(ribo_pseudo_genes))
+)
+
+# Print the summary table to the console.
+print("Summary of Genes to be Removed:")
+print(summary_table)
+
+
+# --- Perform the Filtering ---
+
+# Combine all lists of genes to be removed into a single vector.
+genes_to_remove <- unique(c(mito_genes, ribo_genes, ribo_pseudo_genes))
+
+# Get the list of genes to KEEP by finding the difference between all genes and those to remove.
+genes_to_keep <- setdiff(current_genes, genes_to_remove)
+
+# Print the numbers before and after for verification.
+cat(paste("\nNumber of genes before filtering:", length(current_genes), "\n"))
+cat(paste("Total unique genes to be removed:", length(genes_to_remove), "\n"))
+
+# Subset the Seurat object to keep only the desired genes.
+scrna_obj <- subset(scrna_obj, features = genes_to_keep)
+
+cat(paste("Number of genes after filtering:", nrow(scrna_obj), "\n"))
+```
+
+
+
+
+## TASK 4: Principal Component Analysis (PCA)
+Before running PCA, I performed standard pre-processing: data normalization (LogNormalize) and scaling. Scaling is very important because it prevents highly expressed genes from dominating the analysis. I then ran PCA on the 2000 most highly variable genes to reduce the dimensionality of the data. The histogram below shows the percentage of variance explained by each of the first 20 principal components (PCs).
+
+```{r}
+# Normalize and scale the data, and find variable features
+scrna_obj <- NormalizeData(scrna_obj)
+scrna_obj <- FindVariableFeatures(scrna_obj, nfeatures = 2000)
+scrna_obj <- ScaleData(scrna_obj, features = rownames(scrna_obj))
+
+# Run PCA
+scrna_obj <- RunPCA(scrna_obj, features = VariableFeatures(object = scrna_obj))
+
+# Calculate and plot the variance explained by the first 20 PCs
+pca_stdev <- Stdev(scrna_obj, reduction = "pca")
+variance_explained <- pca_stdev^2
+percent_variance <- (variance_explained / sum(variance_explained)) * 100
+variance_df <- data.frame(PC = 1:20, PercentVariance = percent_variance[1:20])
+
+ggplot(variance_df, aes(x = PC, y = PercentVariance)) +
+  geom_bar(stat = "identity") +
+  scale_x_continuous(breaks = 1:20) +
+  labs(
+    title = "Variance Explained by the First 20 Principal Components",
+    x = "Principal Component (PC)",
+    y = "Percentage of Variance Explained (%)"
+  ) +
+  theme_bw()
+  
+```
+
+
+
+
+
+
+## TASK 5: UMAP Visualization
+UMAP (Uniform Manifold Approximation and Projection) is a technique used to visualize the structure of the data in two dimensions. I ran the UMAP algorithm using the first 13 principal components. I chose 13 PCs because the variance plot (called "Elbow Plot") showed that these first components capture the majority of the biological signal, while components after this point contribute much less variance and likely represent noise.
+
+```{r}
+# Run UMAP on the first 13 PCs
+scrna_obj <- RunUMAP(scrna_obj, reduction = "pca", dims = 1:13)
+
+# Generate the UMAP plot
+DimPlot(scrna_obj, reduction = "umap") +
+  labs(
+    title = "UMAP Visualization of Cell Populations",
+    subtitle = "Based on the first 13 Principal Components"
+  ) +
+  theme_bw()
+```
+
+
+
+
+
+## TASK 6: Clustering
+To formally group the cells, I used a standard graph-based clustering approach. This method first builds a graph where similar cells are connected, and then uses a community detection algorithm (Louvain) to find the clusters. I chose a resolution parameter of 0.5, which is a common setting that provided a good separation of the cell populations visible on the UMAP plot.
+
+```{r}
+# Find neighbors and then find the clusters
+scrna_obj <- FindNeighbors(scrna_obj, reduction = "pca", dims = 1:13)
+scrna_obj <- FindClusters(scrna_obj, resolution = 0.5)
+
+# Visualize the clusters on the UMAP plot
+DimPlot(scrna_obj, reduction = "umap", label = TRUE, pt.size = 0.5) +
+  NoLegend() +
+  labs(
+    title = "UMAP Visualization with Cell Clusters",
+    subtitle = "Louvain algorithm with resolution 0.5"
+  )
+```
+The analysis identified distinct clusters at a resolution of 0.5. The UMAP visualization shows that these clusters are well-separated, with most clusters corresponding to distinct 'islands' of cells. For example, Cluster 0 is the largest population, while other Clusters are smaller and more isolated. This structure suggests a significant degree of heterogeneity in the dataset, with multiple, well-defined cell populations. The biological identity of these clusters will be investigated in the next step by identifying marker genes.
+
+
+
+
+
+## Task 7: Cell Type Annotation
+To assign biological labels to the clusters, I used the SingleR package. This tool compares the gene expression profile of each cell in my dataset to a reference dataset, the Human Primary Cell Atlas, to predict the cell type.
+Below is the UMAP plot colored by the predicted cell types. I also created a table to check the concordance (agreement) between the unsupervised clusters (from Task 6) and the SingleR annotations. Most clusters showed high concordance, being assigned to a single cell type, which increases our confidence in the results.
+
+```{r}
+# Note: The installation code is included for completeness but hidden in the final report.
+# For the report, we just load the libraries as they are assumed to be installed.
+library(SingleR)
+library(celldex)
+library(SingleCellExperiment)
+
+# Load reference data
+ref_data <- HumanPrimaryCellAtlasData()
+
+# Convert to SingleCellExperiment object and run SingleR
+sce_obj <- as.SingleCellExperiment(scrna_obj)
+predictions <- SingleR(test = sce_obj, ref = ref_data, labels = ref_data$label.main)
+
+# Add the predicted labels back to our Seurat object
+scrna_obj$singleR_labels <- predictions$labels[match(rownames(scrna_obj@meta.data), rownames(predictions))]
+
+# Visualize the annotations on the UMAP
+DimPlot(scrna_obj, reduction = "umap", group.by = "singleR_labels", label = TRUE, repel = TRUE) +
+  NoLegend() +
+  labs(
+    title = "UMAP with Automated Cell Type Annotations (SingleR)",
+    subtitle = "Reference: Human Primary Cell Atlas"
+  )
+
+# Create and display the concordance table
+concordance_table <- table(
+  Cluster = scrna_obj$seurat_clusters,
+  Predicted_Cell_Type = scrna_obj$singleR_labels
+)
+
+knitr::kable(concordance_table, caption = "Concordance between Seurat Clusters and SingleR Annotations")
+```
+
+1 Concordance: There is strong concordance between the unsupervised clustering and the automated annotation. For instance, Cluster 1 is almost exclusively composed of cells annotated as 'B-cells', and Cluster 4 consists entirely of 'Endothelial cells'. This indicates that these clusters represent distinct and homogeneous cell populations.
+2 Heterogeneity: Conversely, Cluster 0 shows evidence of heterogeneity. The table reveals that it contains a mix of cells labeled as 'Monocytes' and 'Macrophages'. This is biologically plausible, as these cell types are closely related. This suggests that Cluster 0 may represent a developmental continuum or two very similar cell states that were not separated by our chosen clustering resolution.
+3 Mismatches: Interestingly, a single cell type like 'T-cells' appears to be split across multiple clusters (e.g., Clusters 2, 5, and 7). This could indicate the presence of distinct sub-types of T-cells (e.g., CD4+, CD8+, regulatory T-cells) that the unsupervised clustering successfully separated but the automated annotation grouped under a single broad label.
+
+
+
+
+## TASK 8: Tissue Origin Inference
+The final task was to synthesize all the results to form a hypothesis about the tissue of origin. Based on the cell types identified and their specific marker genes, I was able to make an educated guess.
+My hypothesis is that this dataset originates from a sample of Peripheral Blood Mononuclear Cells (PBMCs). The evidence for this conclusion is based on two main points. First, the overall cell type composition is dominated by circulating immune cells, including T-cells, Monocytes, and B-cells, as shown in the bar chart below. This mixture is characteristic of blood and not a solid tissue.
+
+```{r}
+# Calculate and plot the cell type proportions
+cell_type_counts <- table(scrna_obj$singleR_labels)
+cell_type_proportions <- prop.table(cell_type_counts) * 100
+cell_type_df <- as.data.frame(cell_type_proportions)
+colnames(cell_type_df) <- c("CellType", "Percentage")
+
+ggplot(cell_type_df, aes(x = reorder(CellType, -Percentage), y = Percentage)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.8) +
+  theme_bw(base_size = 12) +
+  labs(
+    title = "Predicted Cell Composition of the Sample",
+    x = "Predicted Cell Type",
+    y = "Percentage of Total Cells (%)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10))
+```
+
+Second, and most importantly, the cell identities were confirmed by checking for canonical marker genes. As seen in the plots below, the expression of these genes matches the predicted cell types perfectly:
+PTPRC (CD45): A general immune marker, is expressed in almost all cells.
+CD3D: A T-cell marker, is specific to the T-cell cluster.
+MS4A1: A B-cell marker, is specific to the B-cell cluster.
+CD14: A Monocyte marker, is specific to the Monocyte cluster.
+This strong evidence from both the cell population structure and specific gene expression makes a PBMC origin the most likely conclusion.
+
+```{r}
+# Visualize canonical markers (this was saved to a file in the script, here we regenerate it)
+FeaturePlot(scrna_obj, features = c("PTPRC", "CD3D", "MS4A1", "CD14"), pt.size = 0.4, order = TRUE)
+```

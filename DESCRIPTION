@@ -1,0 +1,15 @@
+Package: programmingfour
+Title: Analysis of Single-Cell RNA-seq Data
+Version: 0.0.1
+Authors@R: Desirè Cantavenera <desire.cantavenera@edu.unito.it>
+Description: A package to perform a full single-cell analysis pipeline.
+License: MIT
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+URL: https://github.com/cntdsr/programmingfour
+BugReports: https://github.com/cntdsr/programmingfour/issues
