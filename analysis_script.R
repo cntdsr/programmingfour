@@ -61,13 +61,11 @@ protein_coding_genes <- gtf_df %>%
 # Stampa il numero di geni protein-coding trovati
 cat(paste("Numero di geni 'protein-coding' unici trovati nel GTF:", length(protein_coding_genes), "\n"))
 
-# Filtra l'oggetto Seurat per mantenere solo i geni protein-coding
-# Prima, vediamo quanti geni abbiamo
+# Verifica il numero di geni prima del filtro
 n_genes_before <- nrow(scrna_obj)
 cat(paste("Numero di geni nell'oggetto Seurat prima del filtro:", n_genes_before, "\n"))
 
-# Esegui il subsetting
-# I nomi dei geni sono memorizzati nei rownames della matrice di conteggio
+# we retain only genes that are present in our count matrix
 protein_coding_in_matrix <- intersect(rownames(scrna_obj), protein_coding_genes)
 scrna_obj <- subset(scrna_obj, features = protein_coding_in_matrix)
 
@@ -137,7 +135,6 @@ ribo_pseudo_genes <- intersect(current_genes, ribo_pseudo_genes_info)
 
 
 # --- Create the Summary Table ---
-# This is a requirement of the task.
 
 # Create a data frame to summarize the number of genes removed from each category.
 summary_table <- data.frame(
@@ -308,10 +305,10 @@ library(Seurat)
 library(SingleR)
 library(celldex)
 library(ExperimentHub)
-library(SingleCellExperiment) # Aggiunta la libreria mancante
+library(SingleCellExperiment) 
 
 
-# 3. Impostazione della cache in modo non interattivo
+# 3. Impostazione della cache 
 hub_cache_dir <- tools::R_user_dir("ExperimentHub", which = "cache")
 dir.create(hub_cache_dir, recursive = TRUE, showWarnings = FALSE)
 setExperimentHubOption("CACHE", hub_cache_dir)
@@ -324,7 +321,7 @@ ref_data <- HumanPrimaryCellAtlasData()
 cat("Dati di riferimento caricati.\n")
 
 
-# 5. Preparazione dei dati per SingleR (ora funzionerà)
+# 5. Preparazione dei dati per SingleR 
 sce_obj <- as.SingleCellExperiment(scrna_obj)
 
 
@@ -365,3 +362,26 @@ concordance_table <- table(
 )
 cat("\nConcordanza tra i Cluster di Seurat e le Annotazioni di SingleR:\n")
 print(concordance_table)
+
+
+# ---TASK 8: TISSUE OF ORIGIN---
+
+# Calculate and plot the cell type proportions
+cell_type_counts <- table(scrna_obj$singleR_labels)
+cell_type_proportions <- prop.table(cell_type_counts) * 100
+cell_type_df <- as.data.frame(cell_type_proportions)
+colnames(cell_type_df) <- c("CellType", "Percentage")
+
+ggplot(cell_type_df, aes(x = reorder(CellType, -Percentage), y = Percentage)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.8) +
+  theme_bw(base_size = 12) +
+  labs(
+    title = "Predicted Cell Composition of the Sample",
+    x = "Predicted Cell Type",
+    y = "Percentage of Total Cells (%)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10))
+
+
+# Visualize canonical markers (this was saved to a file in the script, here we regenerate it)
+FeaturePlot(scrna_obj, features = c("PTPRC", "CD3D", "MS4A1", "CD14"), pt.size = 0.4, order = TRUE)
