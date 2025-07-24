@@ -383,7 +383,7 @@ ggplot(cell_type_df, aes(x = reorder(CellType, -Percentage), y = Percentage)) +
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10))
 
------
+# -----
 
 # 2. Trova e Visualizza i Geni Marcatori Chiave
 
