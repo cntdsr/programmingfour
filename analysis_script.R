@@ -1,4 +1,4 @@
-# --- PASSO 0: INSTALLAZIONE E CARICAMENTO LIBRERIE ---
+i# --- PASSO 0: INSTALLAZIONE E CARICAMENTO LIBRERIE ---
 
 # Installazione di Seurat
 if (!requireNamespace("Seurat", quietly = TRUE)) {
@@ -42,13 +42,15 @@ scrna_obj <- CreateSeuratObject(counts = expression_matrix, project = "scRNA_Pro
 # Visualizza un riassunto dell'oggetto
 print(scrna_obj)
 
+# ---
+
 # Percorso del file GTF
 gtf_file <- file.path(data_dir, "Homo_sapiens.GRCh38.111.gtf")
 
 # Importa il file GTF
 gtf_data <- rtracklayer::import(gtf_file)
 
-# Converti l'oggetto GRanges in un data.frame per una più facile ispezione
+# Converti l'oggetto in un data.frame per una più facile ispezione
 gtf_df <- as.data.frame(gtf_data)
 
 # Filtra per mantenere solo i geni di tipo 'protein_coding'
@@ -262,13 +264,12 @@ DimPlot(scrna_obj, reduction = "umap") +
 # 2. Apply a community detection algorithm to partition the graph.
 
 # 1. Find Neighbors
-# This function constructs a Shared Nearest Neighbor (SNN) graph. It first identifies the
-# nearest neighbors for each cell within the PCA space we've already defined.
-# We use the same 13 PCs that we used for the UMAP.
+# This function identify the K nearest neighbors in the high dimensional space
+# constructs a Shared Nearest Neighbor (SNN) graph where the edge weight is calculated.
 scrna_obj <- FindNeighbors(scrna_obj, reduction = "pca", dims = 1:13)
 
 # 2. Find Clusters
-# This function applies a community detection algorithm (Louvain algorithm by default)
+# This function applies a community detection algorithm (Louvain algorithm) 
 # to the graph we just built.
 # The 'resolution' parameter controls the granularity of the clustering.
 # Higher values lead to more clusters. 0.5 is a standard starting point.
@@ -364,7 +365,7 @@ cat("\nConcordanza tra i Cluster di Seurat e le Annotazioni di SingleR:\n")
 print(concordance_table)
 
 
-# ---TASK 8: TISSUE OF ORIGIN---
+# --- TASK 8: TISSUE OF ORIGIN ---
 
 # Calculate and plot the cell type proportions
 cell_type_counts <- table(scrna_obj$singleR_labels)
@@ -382,6 +383,28 @@ ggplot(cell_type_df, aes(x = reorder(CellType, -Percentage), y = Percentage)) +
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10))
 
+-----
 
-# Visualize canonical markers (this was saved to a file in the script, here we regenerate it)
-FeaturePlot(scrna_obj, features = c("PTPRC", "CD3D", "MS4A1", "CD14"), pt.size = 0.4, order = TRUE)
+# 2. Trova e Visualizza i Geni Marcatori Chiave
+
+# Troviamo i marcatori per ogni tipo cellulare annotato.
+cat("\nRicerca dei geni marcatori per ogni tipo cellulare (FindAllMarkers)...\n")
+# Aumento la soglia logfc per trovare marcatori più specifici
+all_markers <- FindAllMarkers(scrna_obj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.5, group.by = "singleR_labels")
+
+# Mostra i primi 2 marcatori più specifici per ogni tipo cellulare
+top_markers <- all_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 2, wt = avg_log2FC)
+
+cat("\nPrimi 2 geni marcatori per ogni tipo cellulare predetto:\n")
+print(top_markers)
+
+# 3. Visualizza i Marcatori Canonici sulla UMAP
+cat("\nCreazione dei FeaturePlot per i marcatori canonici...\n")
+marker_plot <- FeaturePlot(scrna_obj, features = c("PTPRC", "CD3D", "MS4A1", "CD14"), pt.size = 0.4, order = TRUE)
+
+print(marker_plot)
+
+cat("--- Fine Task 8 ---\n\n")```
+
